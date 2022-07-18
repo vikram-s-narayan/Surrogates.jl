@@ -1,5 +1,6 @@
 using LinearAlgebra
 using Distributions
+using Zygote
 
 abstract type SurrogateOptimizationAlgorithm end
 
@@ -76,7 +77,9 @@ When w is close to zero, we do pure exploration, while w close to 1 corresponds 
 """
 function surrogate_optimize(obj::Function, ::SRBF, lb, ub, surr::AbstractSurrogate,
                             sample_type::SamplingAlgorithm; maxiters = 100,
-                            num_new_samples = 100)
+                            num_new_samples = 100, needs_gradient=false)
+    println("this is type of surr: ", typeof(surr))
+    println("this is value of needs_gradient: ", needs_gradient)
     scale = 0.2
     success = 0
     failure = 0
@@ -112,11 +115,14 @@ function surrogate_optimize(obj::Function, ::SRBF, lb, ub, surr::AbstractSurroga
                     new_ub[i] = ub[i]
                 end
             end
-
+            println("new_lb: ", new_lb)
             new_sample = sample(num_new_samples, new_lb, new_ub, sample_type)
+            println("eltype(surr.x[1]): ", eltype(surr.x[1]))
             s = zeros(eltype(surr.x[1]), num_new_samples)
             for j in 1:num_new_samples
+                println("this is new_sample[j]: ", new_sample[j] )
                 s[j] = surr(new_sample[j])
+                
             end
             s_max = maximum(s)
             s_min = minimum(s)
@@ -177,8 +183,12 @@ function surrogate_optimize(obj::Function, ::SRBF, lb, ub, surr::AbstractSurroga
             adaptive_point_y = obj(adaptive_point_x)
 
             #5) Update surrogate with (adaptive_point,objective(adaptive_point)
-            add_point!(surr, adaptive_point_x, adaptive_point_y)
-
+            if(needs_gradient)
+                adaptive_grad = Zygote.gradient(obj, adaptive_point_x)
+                add_point!(surr, adaptive_point_x, adaptive_point_y, adaptive_grad)
+            else
+                add_point!(surr, adaptive_point_x, adaptive_point_y)
+            end
             #6) How to go on?
             if surr(adaptive_point_x) < incumbent_value
                 #success

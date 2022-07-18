@@ -1,27 +1,45 @@
 using LinearAlgebra
 using Statistics
 
+# mutable struct GEKPLS{T <: AbstractFloat} <: AbstractSurrogate
+#     x::Matrix{T} #1
+#     y::Matrix{T} #2
+#     grads::Matrix{T} #3
+#     xl::Matrix{T} #xlimits #4
+#     delta::T #5
+#     extra_points::Int #6
+#     num_components::Int #7
+#     beta::Vector{T} #8
+#     gamma::Matrix{T} #9
+#     theta::Vector{T} #10
+#     reduced_likelihood_function_value::T #11
+#     X_offset::Matrix{T} #12
+#     X_scale::Matrix{T} #13
+#     X_after_std::Matrix{T} #14 - X after standardization
+#     pls_mean::Matrix{T} #15
+#     y_mean::T #16
+#     y_std::T #17
+# end
 
-mutable struct GEKPLS{T, X, Y} <: AbstractSurrogate
-    x::X
-    y::Y
-    x_matrix::Matrix{T} #1
-    y_matrix::Matrix{T} #2
-    grads::Matrix{T} #3
-    xl::Matrix{T} #xlimits #4
-    delta::T #5
-    extra_points::Int #6
-    num_components::Int #7
-    beta::Vector{T} #8
-    gamma::Matrix{T} #9
-    theta::Vector{T} #10
-    reduced_likelihood_function_value::T #11
-    X_offset::Matrix{T} #12
-    X_scale::Matrix{T} #13
-    X_after_std::Matrix{T} #14 - X after standardization
-    pls_mean::Matrix{T} #15
-    y_mean::T #16
-    y_std::T #17
+#mutable struct Kriging{X, Y, L, U, P, T, M, B, S, R} <: AbstractSurrogate
+mutable struct GEKPLS{X,Y,B,δ,I,Β,⅁,Θ,R,XO,XS,XSTD,PLS,YM,YSTD} <: AbstractSurrogate
+    x::X #1
+    y::Y #2
+    grads::X #3
+    xl::B #xlimits #4
+    delta::δ #5
+    extra_points::I #6
+    num_components::I #7
+    beta::Β #8
+    gamma:: ⅁#9
+    theta::Θ #10
+    reduced_likelihood_function_value::R #11
+    X_offset::XO #12
+    X_scale::XS #13
+    X_after_std::XSTD #14 - X after standardization
+    pls_mean::PLS #15
+    y_mean::YM #16
+    y_std::YSTD #17
 end
 
 function bounds_error(x, xl)
@@ -38,46 +56,41 @@ function bounds_error(x, xl)
 end
 
 #constructor for GEKPLS Struct
-#function GEKPLS(X, y, grads, n_comp, delta_x, xlimits, extra_points, theta)
-function GEKPLS(x_vec, y_vec, grads_vec, n_comp, delta_x, xlimits, extra_points, theta)
-
-    X = vector_of_tuples_to_matrix(x_vec)
-    y = reshape(y_vec, (size(X, 1), 1))
-    grads = vector_of_tuples_to_matrix2(grads_vec)
-
+function GEKPLS(X, y, grads, n_comp, delta_x, xlimits, extra_points, theta)
+    println("constructor entered")
     #ensure that X values are within the upper and lower bounds
     if bounds_error(X, xlimits)
         println("X values outside bounds")
         return
     end
-
+    println("bounds error passed")
     pls_mean, X_after_PLS, y_after_PLS = _ge_compute_pls(X, y, n_comp, grads, delta_x,
                                                          xlimits, extra_points)
+    println("_ge_compute_pls finished")
     X_after_std, y_after_std, X_offset, y_mean, X_scale, y_std = standardization(X_after_PLS,
                                                                                  y_after_PLS)
+    println("standardization done")
     D, ij = cross_distances(X_after_std)
+    println("cross_distances done")
     pls_mean_reshaped = reshape(pls_mean, (size(X, 2), n_comp))
+    println("reshape done")
     d = componentwise_distance_PLS(D, "squar_exp", n_comp, pls_mean_reshaped)
+    println("componentwise_distance_PLS done")
     nt, nd = size(X_after_PLS)
     beta, gamma, reduced_likelihood_function_value = _reduced_likelihood_function(theta,
                                                                                   "squar_exp",
                                                                                   d, nt, ij,
                                                                                   y_after_std)
-    return GEKPLS(x_vec, y_vec, X, y, grads, xlimits, delta_x, extra_points, n_comp, beta, gamma, theta,
+    println("_reduced_likelihood_function done")
+    return GEKPLS(X, y, grads, xlimits, delta_x, extra_points, n_comp, beta, gamma, theta,
                   reduced_likelihood_function_value,
                   X_offset, X_scale, X_after_std, pls_mean_reshaped, y_mean, y_std)
 end
 
 # predictor 
-#function (g::GEKPLS)(X_test)
-function (g::GEKPLS)(x_vec)
-    println("hi from predictor")
-    #X_test = vector_of_tuples_to_matrix(x_vec)
-    X_test = prep_data_for_pred(x_vec)
-    println("this is X_test after return from vec of tup to mat")
-    println(X_test)
-    println("---")
-    n_eval, n_features_x = size(X_test)
+function (g::GEKPLS)(X_test)
+    #n_eval, n_features_x = size(X_test)
+    n_eval = size(X_test, 1)
     X_cont = (X_test .- g.X_offset) ./ g.X_scale
     dx = differences(X_cont, g.X_after_std)
     pred_d = componentwise_distance_PLS(dx, "squar_exp", g.num_components, g.pls_mean)
@@ -88,21 +101,14 @@ function (g::GEKPLS)(x_vec)
     y = g.y_mean .+ g.y_std * y_
     #return y
     if size(y,1)>1
-        println("in if block in return")
-        return vec(y)
+        return y
     else
-        println("in else block in return")
-        println("this is y: ", y)
         return y[1]
     end
 end
 
-function add_point!(g::GEKPLS, x_tup, y_val, grad_tup)
-    new_x = prep_data_for_pred(x_tup)
-    #new_y = y_val
-    new_grads = prep_data_for_pred(grad_tup)
-
-    if(findfirst(==(vec(new_x)), eachrow(g.x_matrix)) !== nothing)
+function add_point!(g::GEKPLS, new_x, new_y, new_grads)
+    if new_x in g.x
         println("Adding a sample that already exists. Cannot build GEKPLS")
         return
     end
@@ -112,22 +118,16 @@ function add_point!(g::GEKPLS, x_tup, y_val, grad_tup)
         return
     end
 
-    push!(g.x, x_tup)
-    #push!(g.y, y_val)
-    temp_y = copy(g.y)
-    push!(temp_y, y_val)
-    g.y = temp_y
-
-    g.x_matrix = vcat(g.x_matrix, new_x)
-    g.y_matrix = vcat(g.y_matrix, y_val)
+    g.x = vcat(g.x, new_x)
+    g.y = vcat(g.y, new_y)
     g.grads = vcat(g.grads, new_grads)
-    pls_mean, X_after_PLS, y_after_PLS = _ge_compute_pls(g.x_matrix, g.y_matrix, g.num_components,
+    pls_mean, X_after_PLS, y_after_PLS = _ge_compute_pls(g.x, g.y, g.num_components,
                                                          g.grads, g.delta, g.xl,
                                                          g.extra_points)
     g.X_after_std, y_after_std, g.X_offset, g.y_mean, g.X_scale, g.y_std = standardization(X_after_PLS,
                                                                                            y_after_PLS)
     D, ij = cross_distances(g.X_after_std)
-    g.pls_mean = reshape(pls_mean, (size(g.x_matrix, 2), g.num_components))
+    g.pls_mean = reshape(pls_mean, (size(g.x, 2), g.num_components))
     d = componentwise_distance_PLS(D, "squar_exp", g.num_components, g.pls_mean)
     nt, nd = size(X_after_PLS)
     g.beta, g.gamma, g.reduced_likelihood_function_value = _reduced_likelihood_function(g.theta,
@@ -469,19 +469,31 @@ function _reduced_likelihood_function(theta, kernel_type, d, nt, ij, y_norma, no
     reduced_likelihood_function_value = -Inf
     nugget = 1000000.0 * eps() #a jitter for numerical stability; reducing the multiple from 1000000.0 results in positive definite error for Cholesky decomposition;
     if kernel_type == "squar_exp" #todo - add other kernel type abs_exp etc.
-        r = squar_exp(theta, d)
+        #r = squar_exp(theta, d)
+        r = eltype(theta).(squar_exp(theta, d))
     end
-    R = (I + zeros(nt, nt)) .* (1.0 + nugget + noise)
+    
+    #R = (I + zeros(nt, nt)) .* (1.0 + nugget + noise)
+    R = eltype(theta).((I + zeros(nt, nt)) .* (1.0 + nugget + noise))
+    
+    println("---")
+    println(size(d))
+    println(size(R))
+    println("---")
 
     for k in 1:size(ij)[1]
         R[ij[k, 1], ij[k, 2]] = r[k]
         R[ij[k, 2], ij[k, 1]] = r[k]
     end
 
-    C = cholesky(R).L #todo - #values diverge at this point from SMT code; verify impact
-    F = ones(nt, 1) #todo - examine if this should be a parameter for this function
+    C = cholesky(R).L
+
+    #F = ones(nt, 1) #todo - examine if this should be a parameter for this function
+    F = eltype(theta).(ones(nt, 1)) #todo - examine if this should be a parameter for this function
     Ft = C \ F
-    Q, G = qr(Ft)
+    #Q, G = qr(Ft)
+    #Q, G = qr!(Ft)
+    Q, G = qr(copy((Ft)))
     Q = Array(Q)
     Yt = C \ y_norma
     #todo - in smt, they check if the matrix is ill-conditioned using SVD. Verify and include if necessary
@@ -566,49 +578,3 @@ function _modified_pls(X, Y, n_components)
 end
 
 ### MODIFIED PLS ABOVE ###
-
-function vector_of_tuples_to_matrix(v)
-    #convert training data generated by surrogate sampling into a matrix suitable for GEKPLS
-    #=
-    Chris says "ChainRulesCore.@ignore_derivatives"
-    ignore_derivatives() do
-    push!(somes, some)
-    push!(things, thing)
-    end
-    =#
-    #ChainRulesCore.@ignore_derivatives() do
-    #ignore_derivatives() do
-    
-    num_rows = length(v)
-    num_cols = length(first(v))
-    K = zeros(num_rows, num_cols)
-    #K = Array{Float64, 2}(undef, num_rows, num_cols) #this works but gradient returns nothing
-    #K = Array{eltype(first(first(v))), 2}(undef, num_rows, num_cols)
-    for row in 1:num_rows
-        for col in 1:num_cols
-            K[row, col] = v[row][col]
-        end
-    end
-    return K
-end
-
-function vector_of_tuples_to_matrix2(v)
-    #convert gradients into matrix form
-    num_rows = length(v)
-    num_cols = length(first(first(v)))
-    K = zeros(num_rows, num_cols)
-    for row in 1:num_rows
-        for col in 1:num_cols
-            K[row, col] = v[row][1][col]
-        end
-    end
-    return K
-end
-
-function prep_data_for_pred(v)
-    l = length(first(v))
-    if(l == 1)        
-        return [tup[k] for k in 1:1, tup in v]
-    end
-    return [tup[k] for tup in v, k in 1:l]
-end
